@@ -35,7 +35,7 @@ else
   # 2. Remove timestamps (e.g. 00:00:00.000 --> 00:00:02.000)
   # 3. Remove styling tags like <c> or </c>
   # 4. Remove empty lines
-  cat "$VTT_FILE" | grep -v "WEBVTT" | grep -v "Kind:" | grep -v "Language:" | grep -v "\-\->" | sed -E 's/<[^>]*>//g' | awk 'NF' | uniq
+  cat "$VTT_FILE" | grep -v "WEBVTT" | grep -v "Kind:" | grep -v "Language:" | grep -v "\-\->" | sed -E 's/<[^>]*>//g' | awk 'NF' | uniq > "$DIR/../../data/raw/transcript.txt"
 fi
 
 # Cleanup
