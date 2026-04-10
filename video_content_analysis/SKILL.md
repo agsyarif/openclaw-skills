@@ -1,11 +1,6 @@
 ---
-name: Video Content Analysis
-description: >
-This skill is responsible for extracting and processing video content from a YouTube URL.
-It downloads the subtitles (auto-generated or manually uploaded), cleans them, and provides
-the processed transcript for further use, such as training models or analysis.
-This skill is ideal for any task that requires extracting useful information from videos,
-including transcription and text cleaning for downstream tasks.
+name: video-content-analysis
+description: This skill is responsible for extracting and processing video content from a YouTube URL. It downloads the subtitles (auto-generated or manually uploaded), cleans them, and provides the processed transcript for further use, such as training models or analysis. This skill is ideal for any task that requires extracting useful information from videos, including transcription and text cleaning for downstream tasks.
 ---
 
 ## How to Use
