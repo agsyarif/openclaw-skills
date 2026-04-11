@@ -8,7 +8,8 @@ dependencies:
   - ffmpeg >= 4.4
   - openai-whisper (openai/whisper) atau faster-whisper
   - python >= 3.10
-  - anthropic sdk (untuk summarization via Claude API)
+  - ollama (berjalan lokal di localhost:11434)
+  - model tersedia di ollama: qwen2.5:9b (ollama pull qwen2.5:9b)
   - chromadb (untuk output ke RAG vector store)
 output_destinations:
   - /workspaces/ml_processor/data/processed/      ← transcript & chunks mentah
@@ -21,6 +22,7 @@ output_destinations:
 ## Tujuan Skill
 
 Skill ini mengubah file video menjadi pengetahuan terstruktur yang dapat dikonsumsi oleh:
+
 1. **RAG Engine** — untuk retrieval langsung tanpa training ulang
 2. **model_training skill** — sebagai dataset fine-tuning LLM
 
@@ -36,7 +38,7 @@ Skill ini **tidak** melakukan training. Ia hanya memproduksi teks dan embedding.
 ├── extract_audio.py          ← Ekstrak audio dari video
 ├── transcribe.py             ← Transkripsi audio → teks (Whisper)
 ├── segment_and_clean.py      ← Segmentasi + normalisasi teks
-├── summarize.py              ← Summarisasi per segmen via Claude API
+├── summarize.py              ← Summarisasi per segmen via Ollama (qwen2.5:9b)
 ├── chunk_and_embed.py        ← Chunking + embedding → vector store
 ├── build_training_jsonl.py   ← Konversi ke format JSONL untuk training
 └── pipeline.py               ← Orchestrator: jalankan semua step sekaligus
@@ -132,6 +134,7 @@ if __name__ == "__main__":
 ```
 
 **Catatan penting:**
+
 - Selalu gunakan `-y` agar ffmpeg tidak hang menunggu konfirmasi overwrite
 - 16kHz mono adalah standar Whisper — jangan ubah
 - Format WAV PCM tidak ter-compress, ukurannya besar tapi kompatibel sempurna
@@ -225,12 +228,12 @@ if __name__ == "__main__":
 
 **Pilihan model Whisper:**
 
-| Model | VRAM | Akurasi | Kecepatan | Rekomendasi |
-|---|---|---|---|---|
-| `tiny` | ~1GB | Rendah | Sangat cepat | Testing saja |
-| `base` | ~1GB | Cukup | Cepat | Video pendek |
-| `medium` | ~5GB | Bagus | Sedang | **Default** |
-| `large-v3` | ~10GB | Terbaik | Lambat | GPU kuat |
+| Model      | VRAM  | Akurasi | Kecepatan    | Rekomendasi  |
+| ---------- | ----- | ------- | ------------ | ------------ |
+| `tiny`     | ~1GB  | Rendah  | Sangat cepat | Testing saja |
+| `base`     | ~1GB  | Cukup   | Cepat        | Video pendek |
+| `medium`   | ~5GB  | Bagus   | Sedang       | **Default**  |
+| `large-v3` | ~10GB | Terbaik | Lambat       | GPU kuat     |
 
 **Untuk bahasa Indonesia:** minimal gunakan `medium`. Model `small` ke bawah sering salah pada aksen/dialek lokal.
 
@@ -360,16 +363,16 @@ if __name__ == "__main__":
 
 ### [4] summarize.py
 
-**Tujuan:** Hasilkan ringkasan per blok dan ringkasan keseluruhan menggunakan Claude API.
+**Tujuan:** Hasilkan ringkasan per blok dan ringkasan keseluruhan menggunakan Ollama (qwen2.5:9b, lokal).
 
-```python
+````python
 # summarize.py
 import json
 import time
 from pathlib import Path
-import anthropic
+import urllib.request, urllib.error
 
-client = anthropic.Anthropic()  # Baca ANTHROPIC_API_KEY dari env
+# Tidak perlu client — gunakan fungsi ollama_chat() langsung
 
 SYSTEM_PROMPT = """Kamu adalah asisten yang menganalisis konten video.
 Tugasmu adalah merangkum setiap segmen dengan ringkas, akurat, dan terstruktur.
@@ -402,7 +405,7 @@ Berikan output dalam format JSON:
 Hanya output JSON, tanpa teks lain."""
 
     response = client.messages.create(
-        model="claude-sonnet-4-20250514",
+        model="qwen2.5:9b via Ollama",
         max_tokens=500,
         system=SYSTEM_PROMPT,
         messages=[{"role": "user", "content": prompt}]
@@ -463,7 +466,7 @@ def summarize_all(clean_transcript_path: str, output_dir: str) -> str:
     )
 
     overall_response = client.messages.create(
-        model="claude-sonnet-4-20250514",
+        model="qwen2.5:9b via Ollama",
         max_tokens=800,
         system=SYSTEM_PROMPT,
         messages=[{
@@ -511,7 +514,7 @@ if __name__ == "__main__":
     clean_path = sys.argv[1]
     output_dir = str(Path(clean_path).parent)
     summarize_all(clean_path, output_dir)
-```
+````
 
 ---
 
@@ -772,7 +775,7 @@ def run_pipeline(video_path: str, skip_embed: bool = False, skip_jsonl: bool = F
         run_log["steps"]["segment_and_clean"] = {"status": "ok", "duration": round(time.time()-t, 1)}
 
         # Step 4: Summarize
-        print("\n[ Step 4/5 ] Summarisasi via Claude API...")
+        print("\n[ Step 4/5 ] Summarisasi via Ollama (qwen2.5:9b)...")
         t = time.time()
         summary_path = summarize_all(clean_path, str(output_dir))
         run_log["steps"]["summarize"] = {"status": "ok", "duration": round(time.time()-t, 1)}
@@ -828,17 +831,24 @@ if __name__ == "__main__":
 ## Format Output
 
 ### transcript_raw.json
+
 ```json
 {
   "metadata": { "language_detected": "id", "duration_seconds": 1823 },
   "segments": [
-    { "id": 0, "start": 0.0, "end": 4.2, "text": "Halo semua, selamat datang..." }
+    {
+      "id": 0,
+      "start": 0.0,
+      "end": 4.2,
+      "text": "Halo semua, selamat datang..."
+    }
   ],
   "full_text": "Halo semua, selamat datang..."
 }
 ```
 
 ### summary.json
+
 ```json
 {
   "overall": {
@@ -848,7 +858,9 @@ if __name__ == "__main__":
   },
   "blocks": [
     {
-      "block_id": 0, "start": 0.0, "end": 45.3,
+      "block_id": 0,
+      "start": 0.0,
+      "end": 45.3,
       "text": "teks asli...",
       "analysis": {
         "topic": "Pengenalan konsep ML",
@@ -862,6 +874,7 @@ if __name__ == "__main__":
 ```
 
 ### combined_latest.jsonl (per baris)
+
 ```jsonl
 {"prompt": "Apa itu machine learning?", "completion": "Machine learning adalah...", "meta": {"video_id": "tutorial_ml", "type": "qa"}}
 {"prompt": "Ringkas teks berikut:\n\nTeks asli...", "completion": "Ringkasan...", "meta": {"video_id": "tutorial_ml", "type": "summarization"}}
@@ -887,10 +900,10 @@ if __name__ == "__main__":
 
 ## Troubleshooting
 
-| Error | Penyebab | Solusi |
-|---|---|---|
-| `ffmpeg: command not found` | ffmpeg belum terinstall | `apt install ffmpeg` |
-| `CUDA out of memory` | Model Whisper terlalu besar | Turunkan ke `medium` atau `small` |
-| `JSONDecodeError` di summarize.py | Claude API tidak return JSON | Sudah ada fallback, cek isi raw response di log |
-| `collection already exists` | ChromaDB sudah ada collection | Normal — `get_or_create_collection` aman |
-| `combined_latest.jsonl corrupt` | Append gagal di tengah jalan | Rebuild dari per-video JSONL: `cat /data/training_sets/*.jsonl > combined_latest.jsonl` |
+| Error                             | Penyebab                       | Solusi                                                                                  |
+| --------------------------------- | ------------------------------ | --------------------------------------------------------------------------------------- |
+| `ffmpeg: command not found`       | ffmpeg belum terinstall        | `apt install ffmpeg`                                                                    |
+| `CUDA out of memory`              | Model Whisper terlalu besar    | Turunkan ke `medium` atau `small`                                                       |
+| `JSONDecodeError` di summarize.py | Model Ollama tidak return JSON | Sudah ada fallback, cek isi raw response di log                                         |
+| `collection already exists`       | ChromaDB sudah ada collection  | Normal — `get_or_create_collection` aman                                                |
+| `combined_latest.jsonl corrupt`   | Append gagal di tengah jalan   | Rebuild dari per-video JSONL: `cat /data/training_sets/*.jsonl > combined_latest.jsonl` |
