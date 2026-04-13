@@ -1,106 +1,127 @@
 # HEARTBEAT: orchestrator
 
 ## Purpose
-Defines how the orchestrator monitors the health of all registered agents.
-Read this before delegating any task to verify the target agent is available.
+Health monitoring protocol for all agents and external dependencies.
+Check before every task delegation.
 
 ---
 
-## Agent Health Registry
+## Agent Heartbeat Files
 
-### ml_processor
-- Heartbeat file : `/workspaces/ml_processor/heartbeat.json`
-- Expected schema:
-  ```json
-  {
-    "agent_id": "ml_processor",
-    "status": "ok | degraded | error",
-    "last_ping": "<ISO8601 timestamp>",
+| Agent        | Heartbeat Path                              | Check Before Skill        |
+|--------------|---------------------------------------------|---------------------------|
+| fin_analyst  | `/workspaces/fin_analyst/heartbeat.json`    | Every analysis request    |
+| web_scraper  | `/workspaces/web_scraper/heartbeat.json`    | Every news scrape request |
+| ml_processor | `/workspaces/ml_processor/heartbeat.json`   | Every RAG request         |
+
+### Expected Schema (all agents):
+```json
+{
+  "agent_id": "fin_analyst",
+  "status": "ok | degraded | error",
+  "last_ping": "ISO8601",
+  "active_task": null,
+  "components": {
+    "stock_api": "ok | unreachable | timeout",
     "ollama": "ok | unreachable",
-    "chromadb": "ok | empty | missing",
-    "active_task": null
+    "chromadb": "ok | empty | missing"
   }
-  ```
-- Healthy if     : `status = "ok"` AND `last_ping` within last 60 seconds
-- Degraded if    : `status = "degraded"` OR `last_ping` between 60–300 seconds
-- Down if        : File missing OR `status = "error"` OR `last_ping` older than 300 seconds
+}
+```
 
 ---
 
-## Health Check Protocol
-
-Before every task delegation, run this check:
+## Health Evaluation Rules
 
 ```
-1. Read /workspaces/ml_processor/heartbeat.json
-2. Parse last_ping → compute age in seconds
-3. Evaluate:
-   age < 60s  AND status = "ok"       → UP       → proceed with delegation
-   age < 300s OR status = "degraded"  → STALE    → warn user, proceed with caution
-   age > 300s OR file missing         → DOWN     → do NOT delegate, report to user
+age = now - last_ping (in seconds)
+
+age < 60  AND status = "ok"        → UP
+age < 300 OR status = "degraded"   → STALE
+age > 300 OR file missing          → DOWN
+status = "error"                   → DOWN
 ```
 
-### If agent is STALE:
-> "⚠️ ml_processor last responded [N] seconds ago. It may be slow or restarting.
-> Proceeding anyway — if this fails, check the agent logs."
+### Response per status:
 
-### If agent is DOWN:
-> "❌ ml_processor is not responding. Cannot process your request.
-> Recovery steps:
-> 1. Check if the agent process is running
-> 2. Verify Ollama is running: `ollama serve`
-> 3. Check agent logs at /workspaces/ml_processor/logs/"
+**UP** → delegate normally, no warning
+
+**STALE** → warn user:
+> "⚠️ [agent] merespons [N] detik lalu. Mungkin sedang lambat."
+> Proceed with caution, set longer timeout.
+
+**DOWN** → block if critical, warn if optional:
+> "❌ [agent] tidak merespons. [Recovery steps]"
 
 ---
 
-## Sub-Component Health (inside ml_processor)
+## Component-Level Checks
 
-Even when ml_processor is UP, individual components may fail.
-Check `heartbeat.json` sub-fields before specific skill calls:
+### fin_analyst — stock_api component
+```
+If stock_api = "unreachable":
+  → "❌ Tidak bisa mengambil signal dari sistem analisa.
+      Periksa koneksi ke stock analysis API."
+  → Block analysis request entirely
+```
 
-| Skill                   | Required sub-component | Field to check        |
-|-------------------------|------------------------|-----------------------|
-| rag_engine              | Ollama + ChromaDB      | `ollama`, `chromadb`  |
-| video_content_analysis  | Ollama + ffmpeg        | `ollama`              |
+### ml_processor — ollama + chromadb
+```
+If ollama = "unreachable":
+  → Skip RAG enrichment, note in report: "[Konteks video tidak tersedia — Ollama offline]"
 
-### If `ollama = "unreachable"`:
-> "⚠️ The local LLM (Ollama) is not running. Both rag_engine and video_content_analysis
-> require Ollama. Ask ml_processor to run: `ollama serve`"
+If chromadb = "empty":
+  → Skip RAG enrichment, note: "[Knowledge base kosong — belum ada video diproses]"
+```
 
-### If `chromadb = "empty"`:
-> "ℹ️ The knowledge base is empty. To answer questions about video content,
-> process a video first: `pipeline.py <video_path>`"
+### web_scraper
+```
+If DOWN or timeout:
+  → Skip news enrichment, note in report: "[Berita tidak tersedia saat ini]"
+  → Do NOT block analysis — proceed with signal + RAG only
+```
 
-### If `chromadb = "missing"`:
-> "⚠️ Vector store not found. Run video_content_analysis to initialize it."
+---
+
+## External Dependency: Stock Analysis API
+
+- Not an agent — no heartbeat file
+- Check via direct HTTP ping before every fetch_signal call
+- Endpoint : `{STOCK_API_BASE_URL}/health`
+- Timeout  : 3 seconds
+- On fail  : Retry once (2s delay) → if still fail → report to user, block analysis
 
 ---
 
 ## Orchestrator Self-Heartbeat
 
-The orchestrator also writes its own heartbeat for external monitoring:
-- File : `/workspaces/orchestrator/heartbeat.json`
-- Update: Every 30 seconds while running, and after every task completion
-- Schema:
-  ```json
-  {
-    "agent_id": "orchestrator",
-    "status": "ok",
-    "last_ping": "<ISO8601>",
-    "active_task": null,
-    "agents_monitored": ["ml_processor"],
-    "agents_up": ["ml_processor"],
-    "agents_down": []
-  }
-  ```
+Write to `/workspaces/orchestrator/heartbeat.json` every 30s and after each task:
+```json
+{
+  "agent_id": "orchestrator",
+  "status": "ok",
+  "last_ping": "ISO8601",
+  "active_task": null,
+  "uptime_s": 0,
+  "agents_up": ["fin_analyst", "web_scraper", "ml_processor"],
+  "agents_down": [],
+  "requests_served": 0
+}
+```
 
 ---
 
-## Health Summary Table
+## Quick Status Summary (for "status" command)
 
-| Status   | Meaning                              | Orchestrator Action             |
-|----------|--------------------------------------|---------------------------------|
-| UP       | Agent healthy, last_ping < 60s       | Delegate normally               |
-| STALE    | Agent slow or restarting, 60-300s    | Warn user, delegate with caution|
-| DOWN     | Agent unreachable or crashed         | Block delegation, report error  |
-| DEGRADED | Agent up but sub-component failing   | Delegate only supported skills  |
+When user asks for system status, return:
+```
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+🖥️  STATUS SISTEM
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+🟢 fin_analyst     : UP (last ping: Xs ago)
+🟢 web_scraper     : UP (last ping: Xs ago)
+🟡 ml_processor    : STALE (last ping: Xs ago)
+🟢 Stock API       : Reachable
+📦 Knowledge Base  : N chunks, M videos indexed
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+```

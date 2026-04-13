@@ -1,103 +1,221 @@
 # AGENTS: orchestrator
 
-## Registered Agents
+## System Architecture
 
-### ml_processor
-- Workspace     : `/workspaces/ml_processor/`
-- Agent config  : `/agents/ml_processor/agent.json`
-- Heartbeat     : `/workspaces/ml_processor/heartbeat.json`
-- Status        : Active
+```
+[User / API Client]
+        │
+        ▼
+  [orchestrator]  ←── coordinates all agents, delivers final report
+        │
+        ├──────────────────────────────────────────┐
+        │                                          │
+        ▼                                          ▼
+  [fin_analyst]                            [web_scraper]
+  Core analyst agent                       IDX news scraper
+  - Interprets existing system signal      - Scrapes berita saham IDX
+  - Synthesizes all data sources           - Extracts sentiment
+  - Generates full report                  - Returns structured news feed
+        │
+        ├──→ [Existing Stock Analysis API]   ← Pre-computed signals, consensus, instructions
+        └──→ [ml_processor → rag_engine]     ← Domain knowledge from video knowledge base
+```
 
-#### Skills exposed by ml_processor:
+---
 
-**rag_engine**
-- Entry         : `skills/rag_engine/generate.py` → `rag_query()`
-- Trigger       : User question about video content
-- Input payload :
+## Agent: fin_analyst
+
+- Workspace : `/workspaces/fin_analyst/`
+- Heartbeat : `/workspaces/fin_analyst/heartbeat.json`
+- Primary role : Signal interpretation + report generation for IDX stocks
+
+### Skill: fetch_signal
+
+- Entry : `skills/fetch_signal/run.py`
+- Purpose : Call existing stock analysis API, parse and validate response
+- Input:
+  ```json
+  { "symbol": "ITMG", "contextId": 10 }
+  ```
+- Output (normalized from existing API response):
   ```json
   {
-    "query": "string",
-    "top_k": 4,
-    "top_n": 10,
-    "domain_filter": "string | null",
-    "video_filter": "string | null",
-    "temperature": 0.2
+    "symbol": "ITMG",
+    "name": "Indo Tambangraya Megah",
+    "trendConsensus": "CONTINUING",
+    "actionIfHolding": "HOLD",
+    "actionIfNotHolding": "WAIT",
+    "instructions": {
+      "holding": "string",
+      "not_holding": "string"
+    },
+    "consensusScore": "3/3",
+    "consensusInt": 3,
+    "avgConfidencePct": 0,
+    "lastPrice": "0",
+    "fetchedAt": "ISO8601"
   }
   ```
-- Output schema :
-  ```json
-  {
-    "query": "string",
-    "answer": "string",
-    "sources": [
-      {
-        "video_id": "string",
-        "video_title": "string",
-        "start": 0.0,
-        "end": 0.0,
-        "topic": "string",
-        "chunk": "string",
-        "score": 0.0
-      }
-    ],
-    "model": "qwen2.5:9b",
-    "retrieved_chunks": 4,
-    "confidence": "high | medium | low | no_context | error",
-    "duration_s": 0.0
-  }
-  ```
 
-**video_content_analysis**
-- Entry         : `skills/video_content_analysis/pipeline.py`
-- Trigger       : New video file to process
-- Input payload :
+### Skill: generate_report
+
+- Entry : `skills/generate_report/run.py`
+- Purpose : Synthesize signal + news + RAG context → full analysis report
+- Input:
   ```json
   {
-    "video_path": "/workspaces/ml_processor/data/raw/<filename>",
-    "language": "id",
-    "model_size": "medium",
-    "skip_embed": false,
-    "skip_jsonl": false,
-    "force": false
+    "signal": {},
+    "news": [],
+    "rag_context": {},
+    "user_position": "holding | not_holding | unknown"
   }
   ```
-- Output schema :
+- Output (ReportObject):
   ```json
   {
-    "video_id": "string",
-    "status": "success | failed",
-    "steps": {},
-    "total_duration_s": 0.0,
-    "artifacts": {
+    "ticker": "ITMG",
+    "company": "Indo Tambangraya Megah",
+    "generatedAt": "ISO8601",
+    "signal": {
+      "trend": "CONTINUING",
+      "action": "HOLD",
+      "consensusScore": "3/3",
+      "confidencePct": 0,
+      "dataQuality": "full | partial | insufficient"
+    },
+    "instructions": {
+      "holding": "string",
+      "not_holding": "string"
+    },
+    "newsSentiment": {
+      "overall": "positive | negative | neutral | mixed | unavailable",
       "summary": "string",
-      "chunks_indexed": 0,
-      "training_records": 0
+      "articles": [{ "title": "", "source": "", "url": "", "publishedAt": "" }],
+      "conflictsWithSignal": true
+    },
+    "knowledgeContext": {
+      "available": true,
+      "insight": "string",
+      "sources": []
+    },
+    "reasoning": "string",
+    "disclaimer": "Analisa ini bersifat informatif dan tidak merupakan rekomendasi investasi resmi.",
+    "dataFreshness": {
+      "signalAge": "string",
+      "newsAge": "string",
+      "priceAge": "string"
     }
   }
   ```
 
 ---
 
-## Agent Communication Map
+## Agent: web_scraper
 
-```
-[User / API]
-     │
-     ▼
-[orchestrator]
-     │
-     ├──→ [ml_processor] → rag_engine           (knowledge query)
-     │
-     └──→ [ml_processor] → video_content_analysis  (video ingestion)
-```
+- Workspace : `/workspaces/web_scraper/`
+- Heartbeat : `/workspaces/web_scraper/heartbeat.json`
+- Primary role : Scrape and structure IDX-related news and market sentiment
+
+### Skill: scrape_news
+
+- Entry : `skills/scrape_news/run.py`
+- Input:
+  ```json
+  { "symbol": "ITMG", "hours": 24, "max_articles": 10 }
+  ```
+- Output:
+  ```json
+  {
+    "symbol": "ITMG",
+    "scrapedAt": "ISO8601",
+    "articles": [
+      {
+        "title": "string",
+        "summary": "string",
+        "url": "string",
+        "source": "string",
+        "publishedAt": "ISO8601",
+        "sentiment": "positive | negative | neutral",
+        "sentimentScore": 0.0
+      }
+    ],
+    "overallSentiment": "positive | negative | neutral | mixed",
+    "totalFound": 0
+  }
+  ```
+- News sources to scrape (priority order):
+  1. Kontan.co.id
+  2. Bisnis.com
+  3. CNBC Indonesia
+  4. IDX official announcements (idx.co.id)
+  5. Investing.com/id
 
 ---
 
-## Planned Agents (Not Yet Active)
+## Agent: ml_processor
 
-| Agent       | Planned Capability                        | Status   |
-|-------------|-------------------------------------------|----------|
-| web_scraper | Web crawling, video URL downloading       | Planned  |
-| fin_analyst | Financial report analysis, chart parsing  | Planned  |
+- Workspace : `/workspaces/ml_processor/`
+- Heartbeat : `/workspaces/ml_processor/heartbeat.json`
+- Primary role : Video knowledge base and domain knowledge retrieval
 
-When these agents are registered, update this file and HEARTBEAT.md accordingly.
+### Skill: rag_engine (read)
+
+- Entry : `skills/rag_engine/generate.py` → `rag_query()`
+- When called : fin_analyst requests domain context for a sector or concept
+- Input:
+  ```json
+  {
+    "query": "coal mining sector IDX ITMG outlook",
+    "top_k": 4,
+    "domain_filter": null
+  }
+  ```
+- Output: Standard rag_engine output (see ml_processor/AGENTS.md)
+
+### Skill: video_content_analysis (write)
+
+- Entry : `skills/video_content_analysis/pipeline.py`
+- When called : User explicitly adds a new video to the knowledge base
+- Does NOT affect real-time analysis flow
+
+---
+
+## External System: Existing Stock Analysis API
+
+- Type : REST API (user-owned external system)
+- Auth : Configured in `/workspaces/fin_analyst/config/api.json`
+- Base URL : (set in config — not hardcoded here)
+- Key endpoint : `GET /analysis?symbol={TICKER}&contextId={ID}`
+- Response : See example in SOUL.md and fin_analyst/IDENTITY.md
+- SLA : Expected < 3s response time
+- On timeout : Retry once after 2s, then fail and report to orchestrator
+
+---
+
+## Communication Flow (Full Analysis Request)
+
+```
+User: "Analisa ITMG"
+  │
+  ▼
+orchestrator
+  ├─ check_heartbeat(fin_analyst)        → UP
+  ├─ check_heartbeat(web_scraper)        → UP
+  ├─ check_heartbeat(ml_processor)       → UP
+  │
+  ├─ fin_analyst.fetch_signal("ITMG")
+  │    └─ calls existing stock API
+  │    └─ returns: signal object
+  │
+  ├─ web_scraper.scrape_news("ITMG", hours=24)   [parallel]
+  │    └─ returns: articles + sentiment
+  │
+  ├─ ml_processor.rag_query("ITMG coal mining")  [parallel]
+  │    └─ returns: insight + sources
+  │
+  └─ fin_analyst.generate_report(signal, news, rag_context)
+       └─ returns: ReportObject
+  │
+  ▼
+orchestrator formats ReportObject → delivers to user
+```
