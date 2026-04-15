@@ -1,0 +1,56 @@
+{
+  "_comment": "Isi file ini dengan URL sumber berita Anda. Simpan di /workspaces/web_scraper/config/sources_config.json",
+  "_types": {
+    "listing": "Halaman daftar berita — scraper akan extract link artikel dari halaman ini",
+    "article": "URL artikel langsung — scraper ambil konten langsung",
+    "rss":     "RSS/Atom feed XML — paling akurat, tidak perlu CSS selector"
+  },
+
+  "sources": [
+    {
+      "name":         "Contoh Listing Page",
+      "type":         "listing",
+      "enabled":      true,
+      "priority":     1,
+      "rate_limit_s": 2,
+      "urls": [
+        "https://contoh.com/halaman-berita-saham",
+        "https://contoh.com/halaman-emiten"
+      ],
+      "ticker_filter": true,
+      "_note": "Ganti URL di atas dengan URL listing berita Anda"
+    },
+    {
+      "name":         "Contoh RSS Feed",
+      "type":         "rss",
+      "enabled":      true,
+      "priority":     2,
+      "rate_limit_s": 3,
+      "urls": [
+        "https://contoh.com/rss/saham.xml"
+      ],
+      "ticker_filter": true,
+      "_note": "RSS feed paling direkomendasikan — bersih dan terstruktur"
+    },
+    {
+      "name":         "Contoh Artikel Langsung",
+      "type":         "article",
+      "enabled":      false,
+      "priority":     3,
+      "rate_limit_s": 2,
+      "urls": [
+        "https://contoh.com/artikel/123"
+      ],
+      "ticker_filter": false,
+      "_note": "Untuk artikel spesifik yang ingin selalu diambil"
+    }
+  ],
+
+  "defaults": {
+    "max_articles_per_source": 10,
+    "cache_ttl_minutes":       30,
+    "request_timeout_s":       12,
+    "min_title_length":        15,
+    "max_summary_chars":       300
+  }
+}
